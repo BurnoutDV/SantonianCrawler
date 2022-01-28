@@ -1,7 +1,7 @@
 {
-  "endpoint": "https://santonianindustries.com/backend/",
-  "readfile": "readFile/",
-  "hdd_details": "hdd_details/",
+  "endpoint": "https://santonianindustries.com/backend",
+  "readfile": "readFile",
+  "hdd_details": "hdd_details",
   "hdd": "hdd",
-  "file": "file/"
+  "file": "file"
 }

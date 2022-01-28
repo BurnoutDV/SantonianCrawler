@@ -36,6 +36,7 @@ def load_config(file="./config.json"):
                 return data
     except FileNotFoundError:
         logger.warning("cannot find 'config.json', remember to copy 'config.example.json'")
+    
     except json.JSONDecodeError:
         logger.critical("Config file is malformed")
     return False

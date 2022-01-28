@@ -21,8 +21,29 @@
 # @license GPL-3.0-only <https://www.gnu.org/licenses/gpl-3.0.en.html>
 
 import requests
+import logging
 import json
 import html
+import hashlib
+import os
+from typing import Union
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+def sha256_string(text: str):
+    return hashlib.sha256(text).hexdigest()
+
+
+def sha256_file(filename: Union[str, Path]):
+    h = hashlib.sha256()
+    b = bytearray(128 * 1024)
+    mv = memoryview(b)
+    with open(filename, 'rb', buffering=0) as f:
+        for n in iter(lambda: f.readinto(mv), 0):
+            h.update(mv[:n])
+    return h.hexdigest()
 
 
 def list_folders(config: dict):
@@ -93,4 +114,60 @@ def _generic_get_simplifier(url: str):
                  'content': payload.text}
         return False, error
     return True, data
+
+
+class SantonianLog:
+    def __init__(self, name="", content="", audio_path=None):
+        self._hash = ""
+        self.name = name
+        self.content = content
+        self.audio = False
+        self.audio_binary = None
+
+        if audio_path:
+            self.import_audio(audio_path)
+
+    @property
+    def name(self):
+        return self._name
+
+    @name.setter
+    def name(self, name: str):
+        self._name = name
+
+    @property
+    def content(self):
+        return self._content
+
+    @content.setter
+    def content(self, content_text: str):
+        self._hash = sha256_string(content_text)
+        self._content = content_text
+
+    @property
+    def audio(self):
+        return self._audio
+
+    @audio.setter
+    def audio(self, audio_state: bool):
+        if not isinstance(audio_state, bool):
+            self._audio = False
+        if audio_state:
+            self.content = ""
+        self._audio = audio_state
+
+    def import_audio(self, path: Union[str, Path]):
+        if size := os.path.getsize(path) > 16*1024*1024:
+            logging.error(f"Log>importAudio:: file bigger than 16 Mbyte (found {size} bytes)")
+        try:
+            with open(path, "rb") as aud:
+                self.audio_binary = aud.read()
+                self.audio = True
+                self._hash = sha256_file(path)
+        except FileNotFoundError:
+            logger.error(f"Log>importAudio:: failed to load file '{path}'")
+            return None
+
+    def getHash(self):
+        return self._hash
 
