@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 def sha256_string(text: str):
-    return hashlib.sha256(text).hexdigest()
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
 def sha256_file(filename: Union[str, Path]):
@@ -90,9 +90,7 @@ def folder_content(config: dict, folder_id: str):
     status, body = _generic_get_simplifier(url)
     if not status:
         return False, body
-    if len(body) > 0:
-        return True, body
-    return False, body
+    return True, body
 
 
 def split_log_name(name: str, filter=""):

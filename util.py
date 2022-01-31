@@ -35,7 +35,7 @@ def load_config(file="./config.json"):
             if all(key in data for key in _santonian_fields):
                 return data
     except FileNotFoundError:
-        logger.warning("cannot find 'config.json', remember to copy 'config.example.json'")
+        logger.warning("cannot find 'config.json'")
     
     except json.JSONDecodeError:
         logger.critical("Config file is malformed")
