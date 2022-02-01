@@ -71,26 +71,20 @@ class SantonianDB:
                 self._touch_log(rows[0]['uid'])
             # TODO: the case where the log name already exists BUT the content is different
         else:
-            if folder_id := self.get_folder_uid(folder_name) is None:
+            if (folder_id := self.get_folder_uid(folder_name)) is None:
                 return False
-            raw_data = (
-                name,
-                folder_id,
-                content,
-                temp_hash,
-                0,
-                datetime.datetime.now(),
-                datetime.datetime.now()
-            )
-            self.insert_raw_log(raw_data)
-
-    def insert_raw_log(self, raw: tuple):
-        query = f"""INSERT INTO {self.__pre}log
-                    (name, folder, content, hash, revision, last_check, first_entry)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ;"""
-        self.cur.execute(query, raw)
-        self.db.commit()
+            data = (name,
+                    folder_id,
+                    content,
+                    temp_hash,
+                    0,
+                    datetime.datetime.now(),
+                    datetime.datetime.now())
+            query = f"""INSERT INTO {self.__pre}log
+                        (name, folder, content, hash, revision, last_check, first_entry)
+                        VALUES (?, ?, ?, ?, ?, ?, ?);"""
+            self.cur.execute(query, data)
+            self.db.commit()
 
     def _touch_log(self, uid: int):
         query = f"""UPDATE {self.__pre}log
@@ -102,7 +96,7 @@ class SantonianDB:
     def _touch_folder(self, uid: int):
         query = f"""UPDATE {self.__pre}folders
                    SET last_check = ?
-                   WHERE id = ?;"""
+                   WHERE uid = ?;"""
         self.cur.execute(query, (datetime.datetime.now(), uid))
         self.db.commit()
 
@@ -138,25 +132,32 @@ class SantonianDB:
         except sqlite3.IntegrityError:
             logger.warning(f"DB>InsFolder: unique constraints violated (despite checks?)")
 
-    def get_folder_uid(self, input_str: str):
+    def get_folder_uid(self, input_str: str or int):
         # ! change this to return UID instead of id
         """
         Archive Folders are actually referenced by an ID and not by there name, therefore there needs to be some
         kind of abstraction, this will create a new folder if none by that name cannot be found, in creation
         case the id will be huge
         """
+        if isinstance(input_str, str):
+            condition = "name = ?"
+        elif isinstance(input_str, int):
+            condition = "file_id = ?"
+        else:
+            logger.warning(f"DB>getFolderId: wrong input format: {type(input_str)}")
+            return None
         query = f"""
                 SELECT DISTINCT uid, file_id, name
                 FROM {self.__pre}folders
-                WHERE name = ? or file_id = ?;
+                WHERE {condition};
                 """
-        self.cur.execute(query, (str(input_str).lower(), input_str))
+        self.cur.execute(query, [input_str])
         folder = self.cur.fetchall()
         if len(folder) <= 0:
             # ? getting the highest id
             query = f"""SELECT file_id
                         FROM {self.__pre}folders
-                        ORDER file_id DESC
+                        ORDER BY file_id DESC
                         LIMIT 1;"""
             self.cur.execute(query)
             numb = self.cur.fetchone()
@@ -175,7 +176,7 @@ class SantonianDB:
                     highest_id += 1
 
             query = f"""INSERT INTO {self.__pre}folders
-                    (name, file_id, temporary, last_check, first_check)
+                    (name, file_id, temporary, last_check, first_entry)
                     VALUES(?, ?, ?, ?, ?);"""
             self.cur.execute(query, (input_str.lower(),
                                      highest_id,
@@ -183,7 +184,9 @@ class SantonianDB:
                                      datetime.datetime.now(),
                                      datetime.datetime.now()))
             self.db.commit()
-            return highest_id
+            query = f"SELECT uid FROM {self.__pre}folders WHERE file_id = ?;"
+            data = self.cur.execute(query, [highest_id]).fetchone()
+            return data['uid']
         elif len(folder) == 1:
             try:
                 return int(folder[0]['uid'])
@@ -216,3 +219,71 @@ class SantonianDB:
         else:
             return {key: rows[0][key] for key in rows[0].keys()}
 
+    def update_stat(self, key: str, value: str) -> False:
+        """
+        Updates a singular named stat in the database (or creates it if it does not exist)
+
+        I suspect that there is some fancy sql(ite?) statement that does this easier
+
+        :param key: unique key
+        :param value: arbitrary value
+        :return: True if a value was replace, False if a new one was created
+        """
+        query = f"""SELECT uid FROM {self.__pre}stats WHERE property = ?;"""
+        check = self.cur.execute(query, [key]).fetchone()
+        if check:
+            query = f"""UPDATE {self.__pre}stats
+                        SET value = ?
+                        WHERE uid = ?;"""
+            self.cur.execute(query, (str(value), check['uid']))
+        else:
+            query = f""""INSERT INTO {self.__pre}stats
+                         (property, value)
+                         VALUES (?, ?);"""
+            self.cur.execute(query, (key, str(value)))
+        self.db.commit()
+        return check is not None  # * general sanity callback without any real value
+
+    # ? simple procedures that just replace a simple select
+
+    def get_all_folders(self, start=0, order="ASC"):
+        """
+        Simple procedure that queries simply all entries and returns their content, in this case for folders
+
+        :param int start: Offset Parameter, number of entries to hop over
+        :param str order: either ASC or DESC, will default to ASC if anything else is choosen
+        :return: a list of arrays, eg: [{'uid': 2, 'name': 'Archive002', 'file_id': 8}]
+        """
+        if order.upper() != "ASC" and order.upper() != "DESC":
+            order = "ASC"
+        query = f"""SELECT uid, file_id, name, temporary, last_check, first_entry
+                    FROM {self.__pre}folders
+                    ORDER BY uid {order}
+                    LIMIT 25 OFFSET ?;"""
+        return self._general_fetch_query(query, start)
+
+    def get_all_logs(self, start=0, order="ASC"):
+        if order.upper() != "ASC" and order.upper() != "DESC":
+            order = "ASC"
+        _ = self.__pre  # for readability
+        query = f"""SELECT {_}log.uid, {_}log.name, content, {_}folders.name as folder, audio, hash, 
+                            revision, {_}log.last_check, {_}log.first_entry
+                    FROM {_}log
+                    INNER JOIN {_}folders ON {_}log.folder = {_}folders.uid
+                    ORDER BY {_}log.uid {order}
+                    LIMIT 25 OFFSET ?;"""
+        return self._general_fetch_query(query, start)
+
+    def _general_fetch_query(self, query, start):
+        """
+        A bit of boilerplate so i don't have to write it again, this feels like its almost at the fragmentation
+        threshold, maybe a line less and this function would feel entirely useless
+        :param query: valid sqlite query, wont be validated, will just fail through
+        :param int start: Offset Parameter, number of entries to hop over
+        :return:
+        """
+        raw_data = self.cur.execute(query, [start]).fetchall()
+        refined_data = []
+        for each in raw_data:
+            refined_data.append({x: each[x] for x in each.keys()})  # only possible because of row factory
+        return refined_data
