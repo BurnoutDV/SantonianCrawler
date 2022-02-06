@@ -274,6 +274,14 @@ class SantonianDB:
                     LIMIT 25 OFFSET ?;"""
         return self._general_fetch_query(query, start)
 
+    def count_logs(self):
+        query = f"SELECT COUNT(DISTINCT name) as num FROM {self.__pre}log"
+        return self.cur.execute(query).fetchone()['num']
+
+    def count_files(self):
+        query = f"SELECT COUNT(DISTINCT name) as num FROM {self.__pre}folders"
+        return self.cur.execute(query).fetchone()['num']
+
     def _general_fetch_query(self, query, start):
         """
         A bit of boilerplate so i don't have to write it again, this feels like its almost at the fragmentation

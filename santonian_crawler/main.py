@@ -32,7 +32,7 @@ logging.basicConfig(filename='dreyfus.log', format='[%(asctime)s] %(levelname)s:
 
 
 def fetch_full_santonian(database: str):
-    db = SantonianDB("santonian.db")
+    db = SantonianDB(database)
     # ! fetching folder list
     print("fetching folder list")
     status, folders = santonian.list_folders(CONFIG)
