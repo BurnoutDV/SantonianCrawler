@@ -26,27 +26,15 @@ import requests
 import logging
 import json
 import html
-import hashlib
 import os
-import re
+from time import sleep
 from typing import Union
 from pathlib import Path
+from config import api_calls as CONFIG, req_retries, req_wait
+from database_util import SantonianDB
+from util import sha256_file
 
 logger = logging.getLogger(__name__)
-
-
-def sha256_string(text: str):
-    return hashlib.sha256(text.encode('utf-8')).hexdigest()
-
-
-def sha256_file(filename: Union[str, Path]):
-    h = hashlib.sha256()
-    b = bytearray(128 * 1024)
-    mv = memoryview(b)
-    with open(filename, 'rb', buffering=0) as f:
-        for n in iter(lambda: f.readinto(mv), 0):
-            h.update(mv[:n])
-    return h.hexdigest()
 
 
 def list_folders(config: dict):
@@ -103,121 +91,106 @@ def split_log_name(name: str, filter=""):
     return parts[0]
 
 
-def find_date(text_block: str) -> date or None:
+def fetch_full_santonian(database: str):
     """
-    Finds mentions of dates in given text block, will only look for certain patterns
+    Full procedure to download the entire database from scratch
 
-    Known pattern:
-
-    * 9/25/43 - 09-25-2043
-    * May 2049 - 01-05-2049
-    * January 1st, 2053 - 01-01-2053
-    * July 3rd, 2047 - 03-07-2047
-    * March 18th, 2053 - 18-03-2053
-    * 531008 092419 - 08-10-2053 09-24-19
-    * January 25 2028 - 25-01-2028
-
-    We probably could determine the timezone by context but this is like *xkcd 1425*
-
-    :param text_block: text of arbitrary length
-    :return: a datetime of the extracted date or None
-    :rtype: date or None
+    :param database:
+    :return:
     """
-    date_matches = {
-        # * 9/25/43
-        'short': r"\b([1-9]|1[0-2])\/([1-9]|[12][0-9]|3[01])\/(\d{2})\b",
-        # * May 2049
-        'approx': r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s(20\d{2})\b",
-        # * January 25 2028
-        'long1': r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s"
-                 r"(\d{1,2})\s"
-                 r"(20\d{2})\b",
-        # * July 3rd, 2043
-        # * June 18th 2049
-        'long2': r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s"
-                 r"(\d{1,2})"  # 1-99
-                 r"(st|nd|rd|th|st,|nd,|rd,|th,)?\s"  # 1st, 2nd, 3rd, 4th
-                 r"(20\d{2})\b",  # 20xx
-        # * Mar 18 th 2053 (either to differenciate between capture groups
-        'longshort': r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s"
-                     r"(\d{1,2})"  # 1-99
-                     r"(st|nd|rd|th|st,|nd,|rd,|th,)?\s"  # 1st, 2nd, 3rd, 4th
-                     r"(20\d{2})\b",  # 20xx
-        # * Biocom - 531008 092419 (only the date part, time will be discarded for now)
-        'bio': r"\b([0-9]{2})(1[0-2]|0[1-9])(3[01]|[12][0-9]|0[1-9])"
-               r"(\s|.)"
-               r"(0[0-9]|1[0-9]|2[0-3])(0[0-9]|[1-5][0-9])(0[0-9]|[1-5][0-9])\b"
-    }
-    # ! complex pattern for extended dates that are short Hand eg. 'Jan 2nd (19)45' or '12 Mar 1978'
-    r"""(\b\d{1,2}\D{0,3})?
-        \b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?
-        |Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|(Nov|Dec)(?:ember)?)\D?
-        (\d{1,2}\D?
-        (st|nd|rd|th|st,|nd,|rd,|th,)?\s
-        \D?((19[7-9]\d|20\d{2})|\d{2})
-    """
-    template = {  # describes where which part of a month is stored
-        'short': {
-            'year': 3,
-            'month': 1,
-            'day': 2
-        },
-        'approx': {
-            'year': 2,
-            'month': 1,
-            'map_month': True,
-            'day': -1
-        },
-        'long1': {
-            'year': 3,
-            'month': 1,
-            'map_month': True,
-            'day': 2
-        },
-        'long2': {
-            'year': 4,
-            'month': 1,
-            'map_month': True,
-            'day': 2
-        },
-        'longshort': {
-            'year': 4,
-            'month': 1,
-            'map_month': True,
-            'day': 2
-        },
-        'bio': {
-            'year': 1,
-            'month': 2,
-            'day': 3
-        }
-    }
-    month_map = {'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
-                 'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12}
-    for proc, pattern in date_matches.items():
-        if (reg := re.search(pattern, text_block)) is not None:
-            try:
-                start, end = reg.regs[template[proc]['year']]
-                year = int(text_block[start:end])
-                start, end = reg.regs[template[proc]['month']]
-                month = text_block[start:end]
-                start, end = reg.regs[template[proc]['day']]
-                if template[proc]['day'] == -1:
-                    day = 1
-                else:
-                    day = int(text_block[start:end])
-                if year < 100:  # also known as 0-99 assuming positive numbers and hoping for not events pre-2000
-                    year += 2000
-                if 'map_month' in template[proc]:
-                    month = month_map[month[:3]]
-                else:
-                    month = int(month)
-                return date(year, month, day)
-            except TypeError:  # if for some reasons this thing goes south we try the next pattern
-                continue
-            except ValueError:  # should only be thrown by date()
-                continue
-    return None
+    db = SantonianDB(database)
+    # ! fetching folder list
+    print("fetching folder list")
+    status, folders = list_folders(CONFIG)
+    # ["ARCHIVE006","CORRUPTED","ARCHIVE005","ARCHIVE004","ARCHIVE003","ARCHIVE002","ARCHIVE001"]
+    if not status:
+        logging.critical(f"FFS>Cannot retrieve folder list from '{CONFIG['endpoint']}/{CONFIG['hdd']}'")
+        return False
+    # ! fetching the id of each folder
+    files = []
+    for i, file_name in enumerate(folders):
+        print(f"[{i}] {file_name}", end="")
+        while True:
+            repeats = req_retries
+            status, details = folder_id(CONFIG, file_name)
+            if not status:
+                logging.warning(f"FFS>fetch files failed, waiting {req_wait}, {req_retries} more tries")
+                sleep(req_wait)
+                repeats -= 1
+            else:
+                break
+            if repeats <= 0:
+                break
+        if not status:
+            print(" ##FAIL")
+            continue
+        files.append(details)
+        db.insert_folder(file_name, details)
+        print(f" - {details}")
+    if len(files) < 0:
+        logging.warning("FFS>no files in list")
+        return False
+    # DIR for every file
+    for _, file_id in enumerate(files):
+        print(f"[{_}] Fetching ID {file_id}:", end="")
+        repeats = req_retries
+        while True:
+            status, logs = folder_content(CONFIG, file_id)
+            if not status:
+                logging.warning(f"FFS>fetch files failed, waiting {req_wait}s, {repeats} more tries")
+                logging.debug(f"FFS>DEBUG>REQ_BODY>'{logs}'")
+                sleep(req_wait)
+                repeats -= 1
+            else:
+                break
+            if repeats <= 0:
+                break
+        if not status:
+            print(" ##FAIL")
+            logging.warning(f"FFS>fetching file list id='{file_id}' failed ultimately")
+            continue
+        # * nesting, second round for each file in files
+        if not logs:
+            print(" Empty folder, commencing...")
+            continue
+        print(f" {{{len(logs)}}} log files found")
+        for _i, log_name in enumerate(logs):
+            print(f"  [{_i}] Fetching log name {log_name}", end="")
+            if name := split_log_name(log_name, "LOG"):
+                repeats = req_retries
+                while True:
+                    status, body = read_log(CONFIG, name)
+                    if not status:
+                        logging.warning(f"FFS>fetching log failed, waiting {req_wait}s, {repeats} more tries")
+                        sleep(req_wait)
+                        repeats -= 1
+                    else:
+                        break
+                    if repeats <= 0:
+                        break
+                if not status:
+                    print(" ##FAIL")
+                    continue
+                db.insert_text_log(body, log_name, file_id)
+                print(f" - {len(body)}")
+            else:
+                print("##AUD//NoSUPPORT")
+    print("...Process finished")
+    return True
+
+
+def check_folders(database: str):
+    db = SantonianDB(database)
+    all_folders = []
+    inc = 0
+    while True:
+        if folders := db.get_all_folders(inc):
+            all_folders += folders
+        else:
+            break
+        inc += 25
+
+    return [x['name'] for x in all_folders]
 
 
 def _generic_get_simplifier(url: str):

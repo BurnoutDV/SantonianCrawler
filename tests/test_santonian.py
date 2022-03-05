@@ -23,7 +23,7 @@
 import unittest
 from datetime import date
 
-from santonian_crawler.santonian import find_date
+from santonian_crawler.util import find_date
 
 
 class TestSantonian(unittest.TestCase):

@@ -25,7 +25,7 @@ import logging
 import os
 import sqlite3
 
-from santonian import SantonianLog, sha256_string
+from util import sha256_string
 from config import _PREFIX, SHM
 
 logger = logging.getLogger(__name__)
@@ -100,8 +100,8 @@ class SantonianDB:
         self.cur.execute(query, (datetime.datetime.now(), uid))
         self.db.commit()
 
-    def import_log(self, log_object: SantonianLog):
-        pass
+    #def import_log(self, log_object: SantonianLog):
+    #    pass
 
     def insert_folder(self, folder_name: str, folder_id: int):
         # first check if an exact value already exists
@@ -202,12 +202,11 @@ class SantonianDB:
             return None
 
     def get_log_content(self, logname: str):
-        query = f"""SELECT 
-                        name, folder, content, audio, last_check 
+        query = f"""SELECT name, folder, content, audio, last_check, revision 
                     FROM {self.__pre}log
-                    WHERE name LIKE ?
-                    ORDER BY revision ?;"""
-        rows = self.cur.execute(query, (f"%{logname}%", "DESC")).fetchall()
+                    WHERE name LIKE "{logname}"
+                    ORDER BY revision DESC;"""
+        rows = self.cur.execute(query).fetchall()
         len_rows = len(rows)
         if len_rows <= 0:
             return None
@@ -246,9 +245,41 @@ class SantonianDB:
 
     # ? simple procedures that just replace a simple select
 
+    def list_logs_of_folder(self, folder: str, mode="simple", page=0) -> list:
+        """
+        Lists all logs that belong to the specified folder, if folder is unknown, an empty list is returned
+
+        :param str folder:
+        :param str mode: "simple" for just str, "complex for full logs of every entry
+        :param int page: if mode is complex, pagination
+        :return: list
+        """
+        # ? first get folder_uid
+        query = f"""SELECT uid 
+                    FROM {self.__pre}folders
+                    WHERE name LIKE "{folder}"
+                    LIMIT ?;"""
+        raw_res = self._general_fetch_query(query, 1)
+        if len(raw_res) <= 0:
+            logger.warning(f"DB>listlogsoffolder: cannot find id for folder '{folder}'")
+            return []
+        folder_uid = int(raw_res[0]['uid'])
+        # ? second get actual data
+        per_page = 25
+        if mode != "complex":
+            query = f"""SELECT name 
+                        FROM {self.__pre}log
+                        WHERE folder = {folder_uid}
+                        ORDER BY UID ASC
+                        LIMIT {per_page} OFFSET ?;"""
+            raws = self._general_fetch_query(query, page*per_page)
+            return [x['name'] for x in raws]
+        return []
+
     def get_all_folders(self, start=0, order="ASC"):
         """
         Simple procedure that queries simply all entries and returns their content, in this case for folders
+        Returns 25 entries each call
 
         :param int start: Offset Parameter, number of entries to hop over
         :param str order: either ASC or DESC, will default to ASC if anything else is choosen
@@ -286,6 +317,7 @@ class SantonianDB:
         """
         A bit of boilerplate so i don't have to write it again, this feels like its almost at the fragmentation
         threshold, maybe a line less and this function would feel entirely useless
+
         :param query: valid sqlite query, wont be validated, will just fail through
         :param int start: Offset Parameter, number of entries to hop over
         :return:
