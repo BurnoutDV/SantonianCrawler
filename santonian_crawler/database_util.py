@@ -243,7 +243,76 @@ class SantonianDB:
         self.db.commit()
         return check is not None  # * general sanity callback without any real value
 
-    # ? simple procedures that just replace a simple select
+    def create_modify_tag(self, tag_name: str, tag_type: str) -> tuple:
+        """
+        Creates a tag with the given name, if that tag already exists it will overwrite the type
+
+        :param tag_name: unique name of that tag
+        :param tag_type: one of the three types: names, dates, entities (will default to names)
+        :return: a tuple of the written name and type, None if the operation could not take place
+        :rtype: tuple or None
+        """
+        allowed_types = ["names", "dates", "entities"]  # * i pondered implementing this directly in the database
+        # check if the field exists
+        query = f"""SELECT name, type 
+                    FROM {self.__pre}tag 
+                    WHERE name = ?;"""
+        res = self.cur.execute(query, [tag_name]).fetchone()
+        # operations
+        if tag_type not in allowed_types:
+            tag_type = allowed_types[0]
+        if res:  # tag exists
+            if res['type'] != tag_type:
+                query = f"""UPDATE {self.__pre}tag
+                            SET type = ?,
+                            WHERE name = ?;"""
+                self.cur.execute(query, (tag_type, tag_name))
+                self.db.commit()
+                return tag_name, tag_type
+        else:
+            query = f"""INSERT INTO {self.__pre}tag
+                        (name, type)
+                        VALUES (?, ?);"""
+            self.cur.execute(query, (tag_name, tag_type))
+            self.db.commit()
+            return tag_name, tag_type
+        logger.warning(f"DB>c&m_tag: failed to actually create or modify tag '{tag_name}' with type '{tag_type}'")
+        return None
+
+    def tag_file(self, file_name: str, tag_name: str):
+        """
+        adds a specific tag to that specific file
+
+        :param file_name: name of a file, unique
+        :param tag_name: name of the tag, unique
+        :return: False if the tag does not exist
+                 None if the file does not exist / cannot be found
+                 True if the operation was successful (or unnecessary)
+        """
+        # * check for existence
+        query = f"""SELECT uid 
+                    FROM {self.__pre}tag 
+                    WHERE name = ?;"""
+        tag = self.cur.execute(query, [tag_name]).fetchone()
+        if not tag:
+            logger.warning(f"DB>tag_file: could not locate tag with name '{tag_name}'")
+            return False
+        query = f"""SELECT uid 
+                    FROM {self.__pre}log
+                    WHERE name LIKE ?;"""  # like to ignore casesensivity
+        log = self.cur.execute(query, [file_name]).fetchone()
+        if not log:
+            logger.warning(f"DB>tag_file: could not locate file with name '{file_name}'")
+            return None
+        # * creating of link
+        # ! TODO: check for duplicate
+        query = f"""INSERT INTO {self.__pre}tag_link
+                    (log, tag)
+                    VALUES (?, ?);"""
+        self.cur.execute(query, (log['uid'], tag['uid']))
+        self.db.commit()
+        return True
+    # ? "simple" procedures that just replace a simple select
 
     def list_logs_of_folder(self, folder: str, mode="simple", page=0) -> list:
         """
@@ -276,33 +345,46 @@ class SantonianDB:
             return [x['name'] for x in raws]
         return []
 
-    def get_all_folders(self, start=0, order="ASC"):
+    def get_all_folders(self, start=0, limit=25, order="ASC", order_field="uid"):
         """
         Simple procedure that queries simply all entries and returns their content, in this case for folders
         Returns 25 entries each call
 
         :param int start: Offset Parameter, number of entries to hop over
+        :param int limit: maximum of rows that are retrieved
         :param str order: either ASC or DESC, will default to ASC if anything else is choosen
+        :param str order_field: field that is used to order, can only be 'uid', 'file_id', 'name',
+                                'last_check' or 'first_entry'
         :return: a list of arrays, eg: [{'uid': 2, 'name': 'Archive002', 'file_id': 8}]
         """
         if order.upper() != "ASC" and order.upper() != "DESC":
             order = "ASC"
+        possible_orders = ['uid', 'file_id', 'name', 'last_check', 'first_entry', 'revision']
+        if order_field not in possible_orders:
+            order_field = "uid"
         query = f"""SELECT uid, file_id, name, temporary, last_check, first_entry
                     FROM {self.__pre}folders
-                    ORDER BY uid {order}
-                    LIMIT 25 OFFSET ?;"""
+                    ORDER BY {order_field} {order}
+                    LIMIT {limit} OFFSET ?;"""
         return self._general_fetch_query(query, start)
 
-    def get_all_logs(self, start=0, order="ASC"):
+    def get_all_logs(self, start=0, limit=25, order="ASC", order_field="uid"):
         if order.upper() != "ASC" and order.upper() != "DESC":
             order = "ASC"
         _ = self.__pre  # for readability
-        query = f"""SELECT {_}log.uid, {_}log.name, content, {_}folders.name as folder, audio, hash, 
+        allowed_order = {"uid": f"{_}log.uid", "name": f"{_}log.name", 'content': f"{_}log.content",
+                         'folder': f"{_}folders.name", 'revision': "revision", 'last_check': f"{_}log.last_check",
+                         'first_entry': f"{_}log.first_entry"}
+        if order_field in allowed_order:
+            order_field = allowed_order[order_field]
+        else:
+            order_field = allowed_order['uid']
+        query = f"""SELECT {_}log.uid, {_}log.name as name, content, {_}folders.name as folder, audio, hash, 
                             revision, {_}log.last_check, {_}log.first_entry
                     FROM {_}log
                     INNER JOIN {_}folders ON {_}log.folder = {_}folders.uid
-                    ORDER BY {_}log.uid {order}
-                    LIMIT 25 OFFSET ?;"""
+                    ORDER BY {order_field} {order}
+                    LIMIT {limit} OFFSET ?;"""
         return self._general_fetch_query(query, start)
 
     def count_logs(self):

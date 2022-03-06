@@ -21,16 +21,32 @@
 # @license GPL-3.0-only <https://www.gnu.org/licenses/gpl-3.0.en.html>
 
 import json
+import os
+import copy
 import logging
+from math import floor
+from statistics import mean, median, pvariance
+from collections import defaultdict
 import hashlib
 import re
 from typing import Union
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime
+
+try:
+    from shutil import get_terminal_size
+except ImportError:
+    def get_terminal_size():
+        try:
+            return os.get_terminal_size()
+        except OSError:
+            # when executing in PyCharm Debug Window there is no "real" console and you get an Errno 25
+            return 80, 24
 
 logger = logging.getLogger(__name__)
 _santonian_fields = ['endpoint', 'hdd', 'hdd_details', 'file', 'readfile']
-
+__AVG_TOLERANCE = 3  # * how much bigger as average a column is allowed to be to not get trimmed
+__COL_SPACING = 1  # * empty space between columns
 
 def load_config(file="./config.json"):
     global _santonian_fields
@@ -59,6 +75,58 @@ def sha256_file(filename: Union[str, Path]):
         for n in iter(lambda: f.readinto(mv), 0):
             h.update(mv[:n])
     return h.hexdigest()
+
+
+def str_refinement(collection: list or dict, catalyst: dict):
+    """
+    'Refines' the given set of strings with the application of some rules, super specific solution for a specific
+    problem.
+
+    :param collection: the given collection, either a direct dictionary or a list of dictionary
+    :param catalyst: the key:value dictionary describing what to do with the content
+    :return: the same type of collection that was given
+    """
+    if not isinstance(collection, (list, dict)):
+        return None
+    if isinstance(collection, list):
+        returnal = []
+        for keyvalue in collection:
+            returna2 = {}
+            for key, val in keyvalue.items():
+                if key in catalyst:
+                    if value := _single_str_refinement(val, catalyst[key]):
+                        returna2[key] = value
+            if returna2:
+                returnal.append(returna2)
+        return returnal
+    elif isinstance(collection, dict):
+        returnal = {}
+        for key, val in collection.items():
+            if key in catalyst:
+                if value := _single_str_refinement(val, catalyst[key]):
+                    returnal[key] = value
+        return returnal
+    else:
+        return None  # i cannot imagine how we would ever get her
+
+
+def _single_str_refinement(in_str, rule: str):
+    if rule == 'str':
+        return str(in_str)
+    elif rule == 'date_short' or rule == 'date_long':
+        try:
+            this_date = datetime.strptime(in_str, "%Y-%m-%d %H:%M:%S.%f")
+        except ValueError:
+            return None
+        if rule == 'date_short':
+            return this_date.date().strftime("%Y-%m-%d")
+        if rule == 'date_long':
+            return this_date.strftime("%Y-%m-%d %H:%M:%S")
+    elif groups := re.search(r"^(trim:)([0-9]+)$", rule):
+        in_str = in_str.replace("\n", " ")
+        in_str = in_str.replace("\t", "   ")  # not all contain tabs, this is most interesting
+        return in_str[:int(groups[2])]
+    return in_str
 
 
 def find_date(text_block: str) -> date or None:
@@ -176,4 +244,117 @@ def find_date(text_block: str) -> date or None:
             except ValueError:  # should only be thrown by date()
                 continue
     return None
+
+
+# copied from audio metadata shuttle project
+def calc_distribution(val_list: dict, method="median"):
+    if method == "average" or method == "mean":
+        lens = {col: mean(val_list[col]) for col in val_list}
+    else:  # method == "median"
+        lens = {col: median(val_list[col]) for col in val_list}
+    total_len = sum([x for x in lens.values()])
+    return {col: x/total_len for col, x in lens.items()}
+
+
+def _calc_console_widths_absolute_method(headers: list, data: list, max_width=0, columns_width=None):
+    global __AVG_TOLERANCE, __COL_SPACING
+    col, row = get_terminal_size()
+    if max_width == 0 or max_width > col:
+        max_width = col
+    # default things we use later
+    max1_len = defaultdict(int)
+    val_list = defaultdict(list)
+    stat = defaultdict(int)
+    # maximum needed space
+    for line in data:
+        for col in headers:
+            if col in line:
+                stat[col] += 1
+                if col in headers:
+                    tmp = len(line[col])
+                    max1_len[col] = tmp if tmp > max1_len[col] else max1_len[col]
+                    val_list[col].append(tmp)
+    # in case that the headers are bigger than the content
+    # * if column width set, divide avail_space by amount of set columns and make set_len static to those length for
+    # * the first get around
+    max2_len = copy.copy(max1_len)
+    for val in headers:
+        max2_len[val] = len(val) if len(val) > max2_len[val] else max2_len[val]
+    # various numbers
+    disp_cols = [x for x in headers if stat[x] > 0]  # columns that get displayed
+    num_col = len(disp_cols)
+    space_len = (num_col-1) * __COL_SPACING
+    avail_space = max_width - space_len
+
+    # * edge case 1 - available space is not enough to even display all columns
+    # * edge case 2 - there is enough space to show all content-lines
+    # * edge case 3 - there is enough space to show all header & content-lines
+    # * 'edge' case 4 - there is not enough space for all columns (this is what i actually expected to happen)
+    # median of length, longest get available free space
+    per_len = calc_distribution(val_list)
+    set_len = {col: floor(val*avail_space) for col, val in per_len.items()}
+    big_cols = []
+    for col in set_len:
+        if set_len[col] >= max1_len[col]:
+            set_len[col] = max1_len[col]
+        elif set_len[col] <= 0:  # a very tiny column will be at least partially displayed
+            set_len[col] = 1
+        else:
+            big_cols.append(col)
+    rest_space = avail_space - sum([x for x in set_len.values()])
+    num_big_cols = len(big_cols)
+    if num_big_cols <= 0:  # aka. there is enough space for ALL columns, we are not prioritizing headers because i
+                           # assume stuff like columns that only contain small numbers but big titles, in case we have
+                           # an abudance of space we now priotize padding rows with cut headers first before padding oth
+        for col in set_len:
+            mss_head_space = max2_len[col]-set_len[col]
+            if mss_head_space > 0:
+                if mss_head_space <= rest_space:
+                    set_len[col] += mss_head_space
+                    rest_space -= mss_head_space
+                else:
+                    set_len[col] += rest_space
+                    rest_space = 0
+            if rest_space == 0:
+                break
+        if rest_space > 0:  # there is still space to distribute
+            big_cols = [x for x in set_len]  # everyone is a big column now that is allowed to grow
+            num_big_cols = len(big_cols)
+    if num_big_cols > 0:  # if there is space left or big_cols
+        rst_per_col = floor(rest_space/num_big_cols)
+        for col in big_cols:
+            set_len[col] += rst_per_col
+        var_len = {col: pvariance(val_list[col]) for col in disp_cols if col in val_list}
+        var_len = {k: v for k, v in sorted(var_len.items(), key=lambda item: item[1], reverse=True)}
+        bigg = next(iter(var_len.keys()))
+        set_len[bigg] = set_len[bigg] + (avail_space - sum([x for x in set_len.values()]))
+    return set_len, stat
+
+
+def simple_console_view(keys: list, data: list, max_width=0, columns_width=None):
+    r"""
+    Displays a simple console view of any given data, will horribly break if too much data is supplied
+
+    :param list keys: list of relevant dictionary keys, used as heading if occuring
+    :param list data: list of dict
+    :param int max_width: optional maximum width of the whole table
+    :param int column_widths: specifies the maximum widht of any one giving heading, 0 is dynamic
+    :return: nothing, writes directly to console
+    """
+    global __AVG_TOLERANCE, __COL_SPACING
+
+    set_len, stat = _calc_console_widths_absolute_method(keys, data, max_width)
+    header = ""
+    for prop in set_len:
+        header += f"{prop} [{stat[prop]}]{' '*set_len[prop]}"[:set_len[prop]] + " "*__COL_SPACING
+    print(header[:-__COL_SPACING])
+
+    for line in data:
+        body = ""
+        for i, col in enumerate(set_len):
+            if col in line:
+                body += f"{line[col]}{' '*set_len[col]}"[:set_len[col]] + " "*__COL_SPACING
+            else:
+                body += f"{' '*set_len[col]}"[:set_len[col]] + " "*__COL_SPACING
+        print(body[:-__COL_SPACING])
 

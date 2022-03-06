@@ -47,7 +47,8 @@ SHM['stats'] = f"""
 SHM['tags'] = f"""
                 CREATE TABLE IF NOT EXISTS {_PREFIX}tag (
                     uid INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT UNIQUE
+                    name TEXT UNIQUE,
+                    type TEXT
                     );"""
 SHM['tag_link'] = f"""
                 CREATE TABLE IF NOT EXISTS {_PREFIX}tag_link (
