@@ -53,7 +53,7 @@ SHM['tags'] = f"""
 SHM['tag_link'] = f"""
                 CREATE TABLE IF NOT EXISTS {_PREFIX}tag_link (
                     uid INTEGER PRIMARY KEY AUTOINCREMENT,
-                    log INTEGER REFERENCES {_PREFIX}log(uid),
+                    log TEXT REFERENCES {_PREFIX}log(name),
                     tag INTEGER REFERENCES {_PREFIX}tag(uid),
                     changed TIMESTAMP NOT NULL,
                 );"""

@@ -26,7 +26,7 @@ import logging
 import json
 from datetime import datetime, timedelta
 from util import simple_console_view, str_refinement
-__ver__ = 0.21
+__ver__ = 0.22
 
 
 logger = logging.getLogger(__name__)
@@ -128,11 +128,11 @@ class SantonianShell(Cmd):
     def complete_tag(self, text, line, start, end):
         return self._complete_log_names(text, line, start, end, "tag")
 
-    def do_createtag(self, args):
-        """usage: createtag <name> <type:name, date or entity>
+    def do_create_tag(self, args):
+        """usage: create_tag <name> <type:name, date or entity>
 
-        Creates a new tag or modifies the type of an already existing tag, if type is other than one of the three
-        it will default back to name"""
+Creates a new tag or modifies the type of an already existing tag, if type is other than one of the three
+it will default back to name"""
         arguments = args.split(" ")
         if len(arguments) == 2 and arguments[0].strip() != "" and arguments[1].strip() != "":
             if (packed := self.backend.create_modify_tag(arguments[0], arguments[1])) is not None:
@@ -168,8 +168,13 @@ class SantonianShell(Cmd):
                         break
                 else:
                     choosen_log = raw_data[0]
-                print(f"Revision: {choosen_log['revision']}, Last Check: {choosen_log['last_check']}")
-                print(choosen_log['content'])
+                top_line = f"Revision: {choosen_log['revision']}, Last Check: {choosen_log['last_check']}"
+                print(top_line)
+                if choosen_log['tags'].strip() != "":
+                    print(f"Assigned Tags: {choosen_log['tags']}")
+                print(Cmd.ruler*len(top_line))    # ====
+                print(choosen_log['content'])     # content
+                print(Cmd.ruler * len(top_line))  # ====
                 return False
             elif len(arguments[0]) > 0:
                 possibilities = [name for name in self.log_names if name.startswith(arguments[0])]

@@ -202,9 +202,20 @@ class SantonianDB:
             return None
 
     def get_log_content(self, logname: str):
-        query = f"""SELECT name, folder, content, audio, last_check, revision 
-                    FROM {self.__pre}log
-                    WHERE name LIKE "{logname}"
+        _ = self.__pre
+        query = f"""SELECT {_}log.name as name, 
+                           {_}folders.name as folder, 
+                           content, 
+                           audio, 
+                           {_}log.last_check as last_check, 
+                           revision,
+                           COALESCE(group_concat(tag.name, ', '), '') as tags
+                    FROM {_}log
+                    INNER JOIN {_}folders on {_}log.folder = {_}folders.uid
+                    LEFT JOIN {_}tag_link on {_}log.name = {_}tag_link.log
+                    LEFT JOIN {_}tag on {_}tag_link.tag = {_}tag.uid
+                    WHERE {_}log.name LIKE '{logname}'
+                    GROUP BY {_}log.name, {_}log.revision
                     ORDER BY revision DESC;"""
         rows = self.cur.execute(query).fetchall()
         len_rows = len(rows)
@@ -264,7 +275,7 @@ class SantonianDB:
         if res:  # tag exists
             if res['type'] != tag_type:
                 query = f"""UPDATE {self.__pre}tag
-                            SET type = ?,
+                            SET type = ?
                             WHERE name = ?;"""
                 self.cur.execute(query, (tag_type, tag_name))
                 self.db.commit()
@@ -297,7 +308,7 @@ class SantonianDB:
         if not tag:
             logger.warning(f"DB>tag_file: could not locate tag with name '{tag_name}'")
             return False
-        query = f"""SELECT uid 
+        query = f"""SELECT name 
                     FROM {self.__pre}log
                     WHERE name LIKE ?;"""  # like to ignore casesensivity
         log = self.cur.execute(query, [file_name]).fetchone()
@@ -309,7 +320,7 @@ class SantonianDB:
         query = f"""INSERT INTO {self.__pre}tag_link
                     (log, tag, changed)
                     VALUES (?, ?, ?);"""
-        self.cur.execute(query, (log['uid'], tag['uid'], datetime.now()))
+        self.cur.execute(query, (log['name'], tag['uid'], datetime.now()))
         self.db.commit()
         return True
 
@@ -328,7 +339,7 @@ class SantonianDB:
         _ = self.__pre
         # select tags that DO have a date tag
         query = f"""SELECT DISTINCT {_}log.name as name FROM {_}log
-                    INNER JOIN {_}tag_link ON log.uid = {_}tag_link.log
+                    INNER JOIN {_}tag_link ON log.name = {_}tag_link.log
                     INNER JOIN {_}tag ON {_}tag_link.tag = {_}tag.uid
                     WHERE {_}tag.type == ?;
                 """
@@ -434,9 +445,9 @@ class SantonianDB:
                                             COALESCE(group_concat(tag.name, ', '), '') as tags
                                     FROM {_}log
                                     INNER JOIN {_}folders ON {_}log.folder = {_}folders.uid
-                                    LEFT JOIN {_}tag_link on {_}log.uid = {_}tag_link.log
+                                    LEFT JOIN {_}tag_link on {_}log.name = {_}tag_link.log
                                     LEFT JOIN {_}tag on {_}tag_link.tag = {_}tag.uid
-                                    GROUP BY {_}log.name
+                                    GROUP BY {_}log.name, {_}log.revision
                                     ORDER BY {order_field} {order}
                                     LIMIT {limit} OFFSET ?;"""
         if order_field == f"{_}tag.name":  # this more or less ignores the 'tags' paremeter nad just says, we do tags
@@ -444,6 +455,7 @@ class SantonianDB:
                                {_}folders.name as folder, 
                                {_}log.last_check, 
                                {_}log.first_entry, 
+                               revision,
                                content,
                                audio,
                                aud_fl,
@@ -451,10 +463,10 @@ class SantonianDB:
                                COALESCE(group_concat({_}tag.name, ', '), '') as tags
                         FROM {_}log
                         INNER JOIN {_}folders on {_}log.folder = {_}folders.uid
-                        LEFT JOIN {_}tag_link on {_}log.uid = {_}tag_link.log
+                        LEFT JOIN {_}tag_link on {_}log.name = {_}tag_link.log
                         LEFT JOIN {_}tag on {_}tag_link.tag = {_}tag.uid
                         WHERE {_}tag.type = 'date' OR {_}tag.type is Null
-                        GROUP BY {_}log.name
+                        GROUP BY {_}log.name, {_}log.revision
                         ORDER BY {order_field} {order}
                         LIMIT {limit} OFFSET ?;"""
         return self._general_fetch_query(query, start)
