@@ -54,7 +54,8 @@ SHM['tag_link'] = f"""
                 CREATE TABLE IF NOT EXISTS {_PREFIX}tag_link (
                     uid INTEGER PRIMARY KEY AUTOINCREMENT,
                     log INTEGER REFERENCES {_PREFIX}log(uid),
-                    tag INTEGER REFERENCES {_PREFIX}tag(uid)
+                    tag INTEGER REFERENCES {_PREFIX}tag(uid),
+                    changed TIMESTAMP NOT NULL,
                 );"""
 SHM['insert1'] = f"""
                 INSERT INTO {_PREFIX}stats

@@ -20,12 +20,12 @@
 #
 # @license GPL-3.0-only <https://www.gnu.org/licenses/gpl-3.0.en.html>
 
-import datetime
+from datetime import datetime
 import logging
 import os
 import sqlite3
 
-from util import sha256_string
+from util import sha256_string, find_date
 from config import _PREFIX, SHM
 
 logger = logging.getLogger(__name__)
@@ -78,8 +78,8 @@ class SantonianDB:
                     content,
                     temp_hash,
                     0,
-                    datetime.datetime.now(),
-                    datetime.datetime.now())
+                    datetime.now(),
+                    datetime.now())
             query = f"""INSERT INTO {self.__pre}log
                         (name, folder, content, hash, revision, last_check, first_entry)
                         VALUES (?, ?, ?, ?, ?, ?, ?);"""
@@ -90,14 +90,14 @@ class SantonianDB:
         query = f"""UPDATE {self.__pre}log
                    SET last_check = ?
                    WHERE id = ?;"""
-        self.cur.execute(query, (datetime.datetime.now(), uid))
+        self.cur.execute(query, (datetime.now(), uid))
         self.db.commit()
 
     def _touch_folder(self, uid: int):
         query = f"""UPDATE {self.__pre}folders
                    SET last_check = ?
                    WHERE uid = ?;"""
-        self.cur.execute(query, (datetime.datetime.now(), uid))
+        self.cur.execute(query, (datetime.now(), uid))
         self.db.commit()
 
     #def import_log(self, log_object: SantonianLog):
@@ -126,8 +126,8 @@ class SantonianDB:
             self.cur.execute(query, (folder_name,
                                      folder_id,
                                      0,
-                                     datetime.datetime.now(),
-                                     datetime.datetime.now()))
+                                     datetime.now(),
+                                     datetime.now()))
             self.db.commit()
         except sqlite3.IntegrityError:
             logger.warning(f"DB>InsFolder: unique constraints violated (despite checks?)")
@@ -181,8 +181,8 @@ class SantonianDB:
             self.cur.execute(query, (input_str.lower(),
                                      highest_id,
                                      1,
-                                     datetime.datetime.now(),
-                                     datetime.datetime.now()))
+                                     datetime.now(),
+                                     datetime.now()))
             self.db.commit()
             query = f"SELECT uid FROM {self.__pre}folders WHERE file_id = ?;"
             data = self.cur.execute(query, [highest_id]).fetchone()
@@ -252,7 +252,7 @@ class SantonianDB:
         :return: a tuple of the written name and type, None if the operation could not take place
         :rtype: tuple or None
         """
-        allowed_types = ["names", "dates", "entities"]  # * i pondered implementing this directly in the database
+        allowed_types = ["name", "date", "entity"]  # * i pondered implementing this directly in the database
         # check if the field exists
         query = f"""SELECT name, type 
                     FROM {self.__pre}tag 
@@ -307,14 +307,54 @@ class SantonianDB:
         # * creating of link
         # ! TODO: check for duplicate
         query = f"""INSERT INTO {self.__pre}tag_link
-                    (log, tag)
-                    VALUES (?, ?);"""
-        self.cur.execute(query, (log['uid'], tag['uid']))
+                    (log, tag, changed)
+                    VALUES (?, ?, ?);"""
+        self.cur.execute(query, (log['uid'], tag['uid'], datetime.now()))
         self.db.commit()
         return True
+
+    # ? complex procedures that do things
+    def procedure_tag_date(self) -> dict:
+        """
+        Goes over all logs that do not have a date tag already assigned to them and tags them with a date
+        extracted from the text, uses first occurence of a match, only is date precise, not by the hour
+
+        :return: a dictionary of newly tagged entries with dates, format {log_name: date_tag}
+        :rtype: dict
+        """
+        # * retrieving all logs that do not posses a tag of type date, i would appreciate help here, as i lag the
+        # * sql skill to actually extract all entries i want, which would be "do not have date tag or no tag at all"
+        filter_tag_type = "date"
+        _ = self.__pre
+        # select tags that DO have a date tag
+        query = f"""SELECT DISTINCT {_}log.name as name FROM {_}log
+                    INNER JOIN {_}tag_link ON log.uid = {_}tag_link.log
+                    INNER JOIN {_}tag ON {_}tag_link.tag = {_}tag.uid
+                    WHERE {_}tag.type == ?;
+                """
+        res = self.cur.execute(query, [filter_tag_type]).fetchall()
+        ignore_list = set([x['name'] for x in res])  # sets are faster upon lookup (should not matter but good practice)
+        # select all logs
+        query = "SELECT name, content FROM log"
+        res = self.cur.execute(query).fetchall()  # just querying everything is usually faster than asking every single
+                                                  # thing, this might not scale to all eternity
+        contents = {x['name']: x['content'] for x in res}
+        changes = {}
+        for name in contents:
+            if name in ignore_list:
+                continue
+            tag = find_date(contents[name])
+            if tag:
+                self.create_modify_tag(str(tag), "date")
+                self.tag_file(name, str(tag))
+                changes[name] = str(tag)
+        if len(changes) > 0:
+            logger.info(f"Created {len(changes)} tag_links, rough date: {datetime.now().isoformat()}")
+        return changes
+
     # ? "simple" procedures that just replace a simple select
 
-    def list_logs_of_folder(self, folder: str, mode="simple", page=0) -> list:
+    def list_logs_of_folder(self, folder: str, mode="simple", page=0, per_page=20) -> list:
         """
         Lists all logs that belong to the specified folder, if folder is unknown, an empty list is returned
 
@@ -323,26 +363,27 @@ class SantonianDB:
         :param int page: if mode is complex, pagination
         :return: list
         """
-        # ? first get folder_uid
-        query = f"""SELECT uid 
-                    FROM {self.__pre}folders
-                    WHERE name LIKE "{folder}"
-                    LIMIT ?;"""
-        raw_res = self._general_fetch_query(query, 1)
-        if len(raw_res) <= 0:
-            logger.warning(f"DB>listlogsoffolder: cannot find id for folder '{folder}'")
-            return []
-        folder_uid = int(raw_res[0]['uid'])
         # ? second get actual data
-        per_page = 25
+        _ = self.__pre
         if mode != "complex":
-            query = f"""SELECT name 
-                        FROM {self.__pre}log
-                        WHERE folder = {folder_uid}
-                        ORDER BY UID ASC
+            query = f"""SELECT {_}log.name 
+                        FROM {_}log
+                        INNER JOIN {_}folders ON {_}folders.uid = {_}log.folder
+                        WHERE {_}folders.name LIKE '{folder}'
+                        ORDER BY {_}log.uid ASC
                         LIMIT {per_page} OFFSET ?;"""
             raws = self._general_fetch_query(query, page*per_page)
             return [x['name'] for x in raws]
+        else:
+            query = f"""SELECT {_}log.name as name, content, {_}folders.name as folder, audio, hash, 
+                                revision, {_}log.last_check, {_}log.first_entry
+                        FROM {_}log
+                        INNER JOIN {_}folders ON {_}folders.uid = {_}log.folder
+                        WHERE {_}folders.name LIKE '{folder}'
+                        ORDER BY {_}log.uid ASC
+                        LIMIT {per_page} OFFSET ?;"""
+            raws = self._general_fetch_query(query, page * per_page)
+            return raws
         return []
 
     def get_all_folders(self, start=0, limit=25, order="ASC", order_field="uid"):
@@ -368,23 +409,54 @@ class SantonianDB:
                     LIMIT {limit} OFFSET ?;"""
         return self._general_fetch_query(query, start)
 
-    def get_all_logs(self, start=0, limit=25, order="ASC", order_field="uid"):
+    def get_all_logs(self, start=0, limit=25, order="ASC", order_field="uid", tags=False):
         if order.upper() != "ASC" and order.upper() != "DESC":
             order = "ASC"
         _ = self.__pre  # for readability
         allowed_order = {"uid": f"{_}log.uid", "name": f"{_}log.name", 'content': f"{_}log.content",
                          'folder': f"{_}folders.name", 'revision': "revision", 'last_check': f"{_}log.last_check",
-                         'first_entry': f"{_}log.first_entry"}
+                         'first_entry': f"{_}log.first_entry", 'tag_date': f"{_}tag.name"}
         if order_field in allowed_order:
             order_field = allowed_order[order_field]
         else:
             order_field = allowed_order['uid']
-        query = f"""SELECT {_}log.uid, {_}log.name as name, content, {_}folders.name as folder, audio, hash, 
-                            revision, {_}log.last_check, {_}log.first_entry
-                    FROM {_}log
-                    INNER JOIN {_}folders ON {_}log.folder = {_}folders.uid
-                    ORDER BY {order_field} {order}
-                    LIMIT {limit} OFFSET ?;"""
+        # * switch for tags
+        if not tags:
+            query = f"""SELECT {_}log.uid, {_}log.name as name, content, {_}folders.name as folder, audio, hash, 
+                                revision, {_}log.last_check, {_}log.first_entry
+                        FROM {_}log
+                        INNER JOIN {_}folders ON {_}log.folder = {_}folders.uid
+                        ORDER BY {order_field} {order}
+                        LIMIT {limit} OFFSET ?;"""
+        else:
+            query = f"""SELECT {_}log.uid, {_}log.name as name, content, {_}folders.name as folder, audio, hash, 
+                                            revision, {_}log.last_check, {_}log.first_entry,
+                                            COALESCE(group_concat(tag.name, ', '), '') as tags
+                                    FROM {_}log
+                                    INNER JOIN {_}folders ON {_}log.folder = {_}folders.uid
+                                    LEFT JOIN {_}tag_link on {_}log.uid = {_}tag_link.log
+                                    LEFT JOIN {_}tag on {_}tag_link.tag = {_}tag.uid
+                                    GROUP BY {_}log.name
+                                    ORDER BY {order_field} {order}
+                                    LIMIT {limit} OFFSET ?;"""
+        if order_field == f"{_}tag.name":  # this more or less ignores the 'tags' paremeter nad just says, we do tags
+            query = f"""SELECT {_}log.name as name, 
+                               {_}folders.name as folder, 
+                               {_}log.last_check, 
+                               {_}log.first_entry, 
+                               content,
+                               audio,
+                               aud_fl,
+                               hash,
+                               COALESCE(group_concat({_}tag.name, ', '), '') as tags
+                        FROM {_}log
+                        INNER JOIN {_}folders on {_}log.folder = {_}folders.uid
+                        LEFT JOIN {_}tag_link on {_}log.uid = {_}tag_link.log
+                        LEFT JOIN {_}tag on {_}tag_link.tag = {_}tag.uid
+                        WHERE {_}tag.type = 'date' OR {_}tag.type is Null
+                        GROUP BY {_}log.name
+                        ORDER BY {order_field} {order}
+                        LIMIT {limit} OFFSET ?;"""
         return self._general_fetch_query(query, start)
 
     def count_logs(self):

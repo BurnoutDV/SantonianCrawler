@@ -152,6 +152,8 @@ def find_date(text_block: str) -> date or None:
     date_matches = {
         # * 9/25/43
         'short': r"\b([1-9]|1[0-2])\/([1-9]|[12][0-9]|3[01])\/(\d{2})\b",
+        # * 04/05/2054  - its rather unclear if this DAY MONTH YEAR as it only exists in FTR-044-V.LOG
+        'short2': r"\b([012][0-9]|3[01])\/(0[1-9]|1[0-2])\/(\d{4})\b",
         # * May 2049
         'approx': r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s(20\d{2})\b",
         # * January 25 2028
@@ -172,7 +174,9 @@ def find_date(text_block: str) -> date or None:
         # * Biocom - 531008 092419 (only the date part, time will be discarded for now)
         'bio': r"\b([0-9]{2})(1[0-2]|0[1-9])(3[01]|[12][0-9]|0[1-9])"
                r"(\s|.)"
-               r"(0[0-9]|1[0-9]|2[0-3])(0[0-9]|[1-5][0-9])(0[0-9]|[1-5][0-9])\b"
+               r"(0[0-9]|1[0-9]|2[0-3])(0[0-9]|[1-5][0-9])(0[0-9]|[1-5][0-9])\b",
+        # * Biocom K-UX-DeepScan-4-7-52 - Only exists in WKRP-817-CIN.LOG, unclear if DAY-MONTH-YEAR
+        'bio_short': r"\b([1-9]|[12][0-9]|3[01])-([1-9]|1[0-2])-(\d{2})\b"
     }
     # ! complex pattern for extended dates that are short Hand eg. 'Jan 2nd (19)45' or '12 Mar 1978'
     r"""(\b\d{1,2}\D{0,3})?
@@ -187,6 +191,11 @@ def find_date(text_block: str) -> date or None:
             'year': 3,
             'month': 1,
             'day': 2
+        },
+        'short2': {
+            'year': 3,
+            'month': 2,
+            'day': 1
         },
         'approx': {
             'year': 2,
@@ -216,6 +225,11 @@ def find_date(text_block: str) -> date or None:
             'year': 1,
             'month': 2,
             'day': 3
+        },
+        'bio_short': {
+            'year': 3,
+            'month': 2,
+            'day': 1
         }
     }
     month_map = {'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
@@ -261,6 +275,7 @@ def _calc_console_widths_absolute_method(headers: list, data: list, max_width=0,
     col, row = get_terminal_size()
     if max_width == 0 or max_width > col:
         max_width = col
+    max_width = 150
     # default things we use later
     max1_len = defaultdict(int)
     val_list = defaultdict(list)
@@ -268,12 +283,11 @@ def _calc_console_widths_absolute_method(headers: list, data: list, max_width=0,
     # maximum needed space
     for line in data:
         for col in headers:
-            if col in line:
+            if col in line and len(line[col]) > 0:
                 stat[col] += 1
-                if col in headers:
-                    tmp = len(line[col])
-                    max1_len[col] = tmp if tmp > max1_len[col] else max1_len[col]
-                    val_list[col].append(tmp)
+                tmp = len(line[col])
+                max1_len[col] = tmp if tmp > max1_len[col] else max1_len[col]
+                val_list[col].append(tmp)
     # in case that the headers are bigger than the content
     # * if column width set, divide avail_space by amount of set columns and make set_len static to those length for
     # * the first get around
@@ -324,6 +338,7 @@ def _calc_console_widths_absolute_method(headers: list, data: list, max_width=0,
         rst_per_col = floor(rest_space/num_big_cols)
         for col in big_cols:
             set_len[col] += rst_per_col
+        # ? all this does is giving the column with the highest variance the remaining space if there is any
         var_len = {col: pvariance(val_list[col]) for col in disp_cols if col in val_list}
         var_len = {k: v for k, v in sorted(var_len.items(), key=lambda item: item[1], reverse=True)}
         bigg = next(iter(var_len.keys()))
@@ -342,7 +357,6 @@ def simple_console_view(keys: list, data: list, max_width=0, columns_width=None)
     :return: nothing, writes directly to console
     """
     global __AVG_TOLERANCE, __COL_SPACING
-
     set_len, stat = _calc_console_widths_absolute_method(keys, data, max_width)
     header = ""
     for prop in set_len:
