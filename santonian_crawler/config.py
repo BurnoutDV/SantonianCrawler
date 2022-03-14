@@ -55,11 +55,11 @@ SHM['tag_link'] = f"""
                     uid INTEGER PRIMARY KEY AUTOINCREMENT,
                     log TEXT REFERENCES {_PREFIX}log(name),
                     tag INTEGER REFERENCES {_PREFIX}tag(uid),
-                    changed TIMESTAMP NOT NULL,
+                    changed TIMESTAMP NOT NULL
                 );"""
 SHM['insert1'] = f"""
                 INSERT INTO {_PREFIX}stats
                 (property, value)
-                VALUES ('schema_version', '1.0.0')
+                VALUES ('schema_version', '1.0.4')
                 """
 

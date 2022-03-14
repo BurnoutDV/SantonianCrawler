@@ -20,13 +20,13 @@
 # @license GPL-3.0-only <https://www.gnu.org/licenses/gpl-3.0.en.html>
 
 from cmd import Cmd
-import database_util
 import re
 import logging
-import json
 from datetime import datetime, timedelta
-from util import simple_console_view, str_refinement
-__ver__ = 0.22
+# * this package
+import santonian_crawler.database_util as database_util
+from santonian_crawler.util import simple_console_view, str_refinement
+__ver__ = 0.23
 
 
 logger = logging.getLogger(__name__)

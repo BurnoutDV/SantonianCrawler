@@ -20,12 +20,9 @@
 # @license GPL-3.0-only <https://www.gnu.org/licenses/gpl-3.0.en.html>
 
 import logging
-import pprint
-import readline
 
 # ? own stuff / local points
-import santonian
-import shell
+import santonian_crawler.shell as shell
 
 # ! base logger configuration
 logging.basicConfig(filename='dreyfus.log', format='[%(asctime)s] %(levelname)s:%(message)s', level=logging.INFO)

@@ -21,18 +21,26 @@
 # @license GPL-3.0-only <https://www.gnu.org/licenses/gpl-3.0.en.html>
 
 from datetime import datetime
+from time import sleep
 import logging
 import os
 import sqlite3
-
-from util import sha256_string, find_date
-from config import _PREFIX, SHM
+# * this package
+from santonian_crawler.util import sha256_string, find_date
+from santonian_crawler.config import _PREFIX, SHM, api_calls, req_retries, req_wait
+import santonian_crawler.santonian as santonian
 
 logger = logging.getLogger(__name__)
 
 
 class SantonianDB:
-    def __init__(self, db_file):
+    """
+    Abstraction Layer for the santonian database, provides methods to access data without the need to directly use
+    sqlite queries, exposed self.db and self.cur (db handler and cursor) if you feel the need to query yourself
+
+    Will create a new database upon start if the provided file path does not exist
+    """
+    def __init__(self, db_file="santonian.db"):
         self.__pre = _PREFIX
         if not os.path.exists(db_file):
             self.db = sqlite3.connect(db_file)
@@ -362,6 +370,91 @@ class SantonianDB:
         if len(changes) > 0:
             logger.info(f"Created {len(changes)} tag_links, rough date: {datetime.now().isoformat()}")
         return changes
+
+    def remote_fetch_everything(self):
+        """
+        Full procedure to download the entire database from scratch
+
+        :return:
+        """
+        # ! fetching folder list
+        logger.info("DB>FetchALL: start of full download")
+        status, folders = santonian.list_folders(api_calls)
+        # ["ARCHIVE006","CORRUPTED","ARCHIVE005","ARCHIVE004","ARCHIVE003","ARCHIVE002","ARCHIVE001"]
+        if not status:
+            logger.critical(f"DB>FetchAll:Cannot retrieve folder list from '{api_calls['endpoint']}/{api_calls['hdd']}'")
+            return False
+        # ! fetching the id of each folder
+        files = []
+        for i, file_name in enumerate(folders):
+            logger.info(f"[{i}] {file_name}") # end=""
+            while True:
+                repeats = req_retries
+                status, details = santonian.folder_id(api_calls, file_name)
+                if not status:
+                    logger.warning(f"DB>FetchAll: fetch files failed, waiting {req_wait}, {req_retries} more tries")
+                    sleep(req_wait)
+                    repeats -= 1
+                else:
+                    break
+                if repeats <= 0:
+                    break
+            if not status:
+                logger.info(" ##FAIL")
+                continue
+            files.append(details)
+            self.insert_folder(file_name, details)
+            logger.info(f" - {details}")
+        if len(files) < 0:
+            logger.warning("DB>FetchAll:no files in list")
+            return False
+        # DIR for every file
+        for _, file_id in enumerate(files):
+            logger.info(f"[{_}] Fetching ID {file_id}:") # end=""
+            repeats = req_retries
+            while True:
+                status, logs = santonian.folder_content(api_calls, file_id)
+                if not status:
+                    logging.warning(f"FFS>fetch files failed, waiting {req_wait}s, {repeats} more tries")
+                    logging.debug(f"FFS>DEBUG>REQ_BODY>'{logs}'")
+                    sleep(req_wait)
+                    repeats -= 1
+                else:
+                    break
+                if repeats <= 0:
+                    break
+            if not status:
+                logger.info(" ##FAIL")
+                logger.warning(f"FFS>fetching file list id='{file_id}' failed ultimately")
+                continue
+            # * nesting, second round for each file in files
+            if not logs:
+                logger.info(" Empty folder, commencing...")
+                continue
+            logger.info(f" {{{len(logs)}}} log files found")
+            for _i, log_name in enumerate(logs):
+                logger.info(f"  [{_i}] Fetching log name {log_name}") # end=""
+                if name := santonian.split_log_name(log_name, "LOG"):
+                    repeats = req_retries
+                    while True:
+                        status, body = santonian.read_log(api_calls, name)
+                        if not status:
+                            logger.warning(f"FFS>fetching log failed, waiting {req_wait}s, {repeats} more tries")
+                            sleep(req_wait)
+                            repeats -= 1
+                        else:
+                            break
+                        if repeats <= 0:
+                            break
+                    if not status:
+                        logger.info(" ##FAIL")
+                        continue
+                    self.insert_text_log(body, log_name, file_id)
+                    logger.info(f" - {len(body)}")
+                else:
+                    logger.info("##AUD//NoSUPPORT")
+        logger.info("...Process finished")
+        return True
 
     # ? "simple" procedures that just replace a simple select
 

@@ -30,9 +30,8 @@ import os
 from time import sleep
 from typing import Union
 from pathlib import Path
-from config import api_calls as CONFIG, req_retries, req_wait
-from database_util import SantonianDB
-from util import sha256_file
+# * this package
+from santonian_crawler.util import sha256_file
 
 logger = logging.getLogger(__name__)
 
@@ -89,108 +88,6 @@ def split_log_name(name: str, filter=""):
     if filter and parts[1] != filter:
         return None
     return parts[0]
-
-
-def fetch_full_santonian(database: str):
-    """
-    Full procedure to download the entire database from scratch
-
-    :param database:
-    :return:
-    """
-    db = SantonianDB(database)
-    # ! fetching folder list
-    print("fetching folder list")
-    status, folders = list_folders(CONFIG)
-    # ["ARCHIVE006","CORRUPTED","ARCHIVE005","ARCHIVE004","ARCHIVE003","ARCHIVE002","ARCHIVE001"]
-    if not status:
-        logging.critical(f"FFS>Cannot retrieve folder list from '{CONFIG['endpoint']}/{CONFIG['hdd']}'")
-        return False
-    # ! fetching the id of each folder
-    files = []
-    for i, file_name in enumerate(folders):
-        print(f"[{i}] {file_name}", end="")
-        while True:
-            repeats = req_retries
-            status, details = folder_id(CONFIG, file_name)
-            if not status:
-                logging.warning(f"FFS>fetch files failed, waiting {req_wait}, {req_retries} more tries")
-                sleep(req_wait)
-                repeats -= 1
-            else:
-                break
-            if repeats <= 0:
-                break
-        if not status:
-            print(" ##FAIL")
-            continue
-        files.append(details)
-        db.insert_folder(file_name, details)
-        print(f" - {details}")
-    if len(files) < 0:
-        logging.warning("FFS>no files in list")
-        return False
-    # DIR for every file
-    for _, file_id in enumerate(files):
-        print(f"[{_}] Fetching ID {file_id}:", end="")
-        repeats = req_retries
-        while True:
-            status, logs = folder_content(CONFIG, file_id)
-            if not status:
-                logging.warning(f"FFS>fetch files failed, waiting {req_wait}s, {repeats} more tries")
-                logging.debug(f"FFS>DEBUG>REQ_BODY>'{logs}'")
-                sleep(req_wait)
-                repeats -= 1
-            else:
-                break
-            if repeats <= 0:
-                break
-        if not status:
-            print(" ##FAIL")
-            logging.warning(f"FFS>fetching file list id='{file_id}' failed ultimately")
-            continue
-        # * nesting, second round for each file in files
-        if not logs:
-            print(" Empty folder, commencing...")
-            continue
-        print(f" {{{len(logs)}}} log files found")
-        for _i, log_name in enumerate(logs):
-            print(f"  [{_i}] Fetching log name {log_name}", end="")
-            if name := split_log_name(log_name, "LOG"):
-                repeats = req_retries
-                while True:
-                    status, body = read_log(CONFIG, name)
-                    if not status:
-                        logging.warning(f"FFS>fetching log failed, waiting {req_wait}s, {repeats} more tries")
-                        sleep(req_wait)
-                        repeats -= 1
-                    else:
-                        break
-                    if repeats <= 0:
-                        break
-                if not status:
-                    print(" ##FAIL")
-                    continue
-                db.insert_text_log(body, log_name, file_id)
-                print(f" - {len(body)}")
-            else:
-                print("##AUD//NoSUPPORT")
-    print("...Process finished")
-    return True
-
-
-def check_folders(database: str):
-    db = SantonianDB(database)
-    all_folders = []
-    inc = 0
-    while True:
-        if folders := db.get_all_folders(inc):
-            all_folders += folders
-        else:
-            break
-        inc += 25
-
-    return [x['name'] for x in all_folders]
 
 
 def _generic_get_simplifier(url: str):

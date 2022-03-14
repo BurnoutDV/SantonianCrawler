@@ -27,7 +27,7 @@ with open("README.md", 'r') as f:
 
 setup(
     name='santonian_crawler',
-    version='0.3',
+    version='0.4',
     description='A stupid little collection of utilities that download things from the Santonian Enterprise Website',
     long_description=long_description,
     license="GPLv3",
