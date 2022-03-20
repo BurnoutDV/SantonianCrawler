@@ -10,7 +10,7 @@ In the beginning i just wanted an offline copy, also the website version had som
 
 The first task was to crawl the entire database provided by the website and periodically check for changes, both in overall scope (read: new entries) but also for changes in the existing log files to divine some clues out of those changes. All data is saved in a local sqlite database
 
-There is also a cli interface and a planned TUI.
+As of now i use this project as playground to try python stuff i am not familiar with, the flask integration is just some fancy thing i always heard about but never found a use case for when working on *real* projects
 
 
 
@@ -51,6 +51,12 @@ Upon start the program will look for a file called `santonian.db` in the current
 
 To fill the database, the interactive shell has to be called (default main without arguments) and the procedure "full_fetch" to be executed, use `proc full_santonian_fetch`
 
+## Existing Features
+
+* cmd style interface by default
+* some procedures to tag files by data automatically
+* flask integration to mimic behaviour of real santonian website `python -m flask run`
+
 ## Missing Features
 
 There is quite a lot i yet want to build
@@ -60,9 +66,16 @@ There is quite a lot i yet want to build
 * cli arguments to allow cron job usage for recurring checks
 * Text User Interface, maybe with [Textual](https://github.com/Textualize/textual)?
 * cmd: filter by content
-* cmd: proper datatable cmd interface, it messes up sometimes
+* cmd: fixed datatable cmd interface, it messes up sometimes
 * doc texts, expecially in the cmd side but also in the db backend
 * properly integrating the santonian download codes in the rest
+
+## Stupid Ideas
+
+* download audio files, store them as blob and hash them 
+* visualize content of audio as simple Sparklines `[0—⎻⎺‾⎺⎻—x—⎼⎽_⎽⎼—]` (`_⎽⎼—⎻⎺‾`) or `▁▂▃▄▅▆▇█` 
+* communication between instances of santonian_Crawler to sync data to each other (this seems like madness)
+* distribution system for subordinate Santonian_Crawlers
 
 ### Development Notes
 

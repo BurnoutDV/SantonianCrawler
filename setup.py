@@ -35,7 +35,7 @@ setup(
     author='BurnoutDV',
     author_email='development@burnoutdv.com',
     packages=['santonian_crawler'],
-    install_requires=['requests'],
+    install_requires=['requests', 'flask'],
     classifiers=[
         "Development Status :: 4 - Beta",
         "Environment :: Console",

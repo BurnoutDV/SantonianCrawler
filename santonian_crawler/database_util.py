@@ -40,10 +40,15 @@ class SantonianDB:
 
     Will create a new database upon start if the provided file path does not exist
     """
-    def __init__(self, db_file="santonian.db"):
+    def __init__(self, db_file="santonian.db", check_same_thread=True):
+        """
+
+        :param str db_file: path to the sqlite3 database file, if not existing, a new one will be created
+        :param bool check_same_thread: POTENTIALLY DANGEROUS, deactivates thread safety, is PIL our friend?
+        """
         self.__pre = _PREFIX
         if not os.path.exists(db_file):
-            self.db = sqlite3.connect(db_file)
+            self.db = sqlite3.connect(db_file, check_same_thread=check_same_thread)
             self.cur = self.db.cursor()
             self._create_scheme()
             self.db.close()
@@ -140,12 +145,15 @@ class SantonianDB:
         except sqlite3.IntegrityError:
             logger.warning(f"DB>InsFolder: unique constraints violated (despite checks?)")
 
-    def get_folder_uid(self, input_str: str or int):
+    def get_folder_uid(self, input_str: str or int, no_create=False):
         # ! change this to return UID instead of id
         """
         Archive Folders are actually referenced by an ID and not by there name, therefore there needs to be some
         kind of abstraction, this will create a new folder if none by that name cannot be found, in creation
         case the id will be huge
+
+        :param str or int input_str: name or file_id of an archive-folder
+        :param bool no_create: if True there will be just a None if the id cannot be found
         """
         if isinstance(input_str, str):
             condition = "name = ?"
@@ -162,6 +170,8 @@ class SantonianDB:
         self.cur.execute(query, [input_str])
         folder = self.cur.fetchall()
         if len(folder) <= 0:
+            if no_create:  # if we are just querying for an id and we get nothing we return that, the other function
+                return None  # is for initial creation when going through all the motions
             # ? getting the highest id
             query = f"""SELECT file_id
                         FROM {self.__pre}folders
@@ -209,6 +219,37 @@ class SantonianDB:
                 logger.info(f"DB>getFileId: {line['uid']} - {line['file_id']} / {line['name']}")
             return None
 
+    def get_folder_santa_id(self, name: str) -> None or int:
+        """
+        Returns the internal, original santonian database id of a given name..if it exists
+
+        :param str name: name of the archive you want to read
+        :return: id as int or none
+        :rtype: int or None
+        """
+        query = f"SELECT file_id FROM {self.__pre}folders WHERE name LIKE ?;"
+        result = self.cur.execute(query, [name]).fetchone()
+        if result:
+            return int(result['file_id'])
+        else:
+            return None
+
+    def get_folder_by_santa_id(self, santa_id: int) -> None or str:
+        """
+        Another of those functions that only exist to mimic the real API
+
+        :param santa_id: internally known as 'file_id' from the original santonian website
+        :return: None or str
+        """
+        if not isinstance(santa_id, int):  # hard typing intensified
+            return None
+        query = f"SELECT name FROM {self.__pre}folders WHERE file_id = ?;"
+        result = self.cur.execute(query, [santa_id]).fetchone()
+        if result:
+            return result['name']
+        else:
+            return None
+
     def get_log_content(self, logname: str):
         _ = self.__pre
         query = f"""SELECT {_}log.name as name, 
@@ -237,6 +278,22 @@ class SantonianDB:
         else:
             return {key: rows[0][key] for key in rows[0].keys()}
 
+    def get_log_name_extension_blind(self, log_name: str) -> str:
+        """
+        middleware function that gets the name of a log regardless of extension, used to mimic santonian website
+
+        :param log_name: name of the log without the extension part
+        :return: Name of the log or an empty string
+        :rtype: str
+        """
+        query = f"SELECT name FROM {self.__pre}log WHERE name LIKE ? ORDER BY revision DESC LIMIT 1"
+        result = self.cur.execute(query, [f"{log_name}____"]).fetchone()
+        if result:
+            return result['name']
+        else:
+            return ""
+
+
     def update_stat(self, key: str, value: str) -> False:
         """
         Updates a singular named stat in the database (or creates it if it does not exist)
@@ -262,7 +319,7 @@ class SantonianDB:
         self.db.commit()
         return check is not None  # * general sanity callback without any real value
 
-    def create_modify_tag(self, tag_name: str, tag_type: str) -> tuple:
+    def create_modify_tag(self, tag_name: str, tag_type: str) -> None or tuple:
         """
         Creates a tag with the given name, if that tag already exists it will overwrite the type
 
@@ -488,7 +545,6 @@ class SantonianDB:
                         LIMIT {per_page} OFFSET ?;"""
             raws = self._general_fetch_query(query, page * per_page)
             return raws
-        return []
 
     def get_all_folders(self, start=0, limit=25, order="ASC", order_field="uid"):
         """
