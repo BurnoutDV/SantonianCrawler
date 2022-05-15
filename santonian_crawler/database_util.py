@@ -293,7 +293,6 @@ class SantonianDB:
         else:
             return ""
 
-
     def update_stat(self, key: str, value: str) -> False:
         """
         Updates a singular named stat in the database (or creates it if it does not exist)

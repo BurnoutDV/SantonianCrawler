@@ -24,9 +24,15 @@ import re
 import logging
 from datetime import datetime, timedelta
 # * this package
+import requests
+
 import santonian_crawler.database_util as database_util
-from santonian_crawler.util import simple_console_view, str_refinement
-__ver__ = 0.23
+from santonian_crawler.util import simple_console_view, str_refinement, check_for_mp3_link, audio_sparklines, \
+    storage_sparkline_to_sparkline
+from santonian_crawler.santonian import list_folders, read_log
+from santonian_crawler.config import api_calls
+
+__ver__ = 0.24
 
 
 logger = logging.getLogger(__name__)
@@ -204,6 +210,58 @@ it will default back to name"""
             time_one = datetime.now()
             print(f"Created {len(dates)} date tags based on regex match on all entries without a date tag")
 
+    def do_remote(self, args):
+        """usage remote <folders/files [folders]/log [file_id]>
+
+        Checks the Santonian Website for files without buffering by local database
+        """
+        # ? of all commands i have written this seems the most crude one
+        arguments = args.split(" ")
+        if len(arguments) <= 0:
+            print("Cannot call remote without any parameters, see help")
+            return False
+        if len(arguments) == 1 and arguments[0] == "folders":
+            remote_info = f"Fetching remote folder list from {api_calls['endpoint']}"
+            print(remote_info, end="\r")
+            status, content = list_folders(api_calls)
+            print(" "*len(remote_info), end="\r")
+            if not status:
+                print(f"Failed to load remote data, error: {content}")
+                return False
+            print(f"Found {len(content)} logs:")
+            for name in content:
+                print(name)
+            return False
+        if len(arguments) >= 1:
+            if arguments[0] == "log":
+                name = arguments[1]
+                remote_info = f"Fetching remote file with name '{name}'"
+                print(remote_info, end="\r")
+                status, content = read_log(api_calls, name)
+                print(" "*len(remote_info), end="\r")
+                if not status:
+                    print(f"Could not load remote log, name not found: '{content}'")
+                    return False
+                print(f"Log found, length: {len(content)}")
+                if check_for_mp3_link(content):
+                    remote_info = "Audiofile detected, downloading..."
+                    print(remote_info, end="\r")
+                    response = requests.get(content)
+                    with open(f"{name}.mp3", "wb") as local_file:
+                        for chunk in response.iter_content(100000):
+                            local_file.write(chunk)
+                    print(" " * len(remote_info), end="\r")
+                    print(f"Downloaded {len(response.content)} bytes of audio file.")
+                    # ! this wont work on your local device because there is no function to actually convert the mp3
+                    storage = audio_sparklines(f"{name}.wav", chars=64, high_res=True)
+                    print(storage)
+                    print(storage_sparkline_to_sparkline(storage))
+                    return False
+                print(content)
+                return False
+        print("Unknown parameters used, see help for correct ones")
+        return False
+
     def do_nextpage(self, line):
         """usage: nextpage {no parameters}
 
@@ -216,6 +274,8 @@ it will default back to name"""
 
         exits application, saving open changes to database
         """
+        self.backend.db.commit()
+        self.backend.close()
         return True
 
     #def postcmd(self, stop, line):

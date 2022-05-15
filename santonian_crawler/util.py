@@ -24,6 +24,8 @@ import json
 import os
 import copy
 import logging
+import wave
+import numpy
 from math import floor
 from statistics import mean, median, pvariance
 from collections import defaultdict
@@ -47,6 +49,7 @@ logger = logging.getLogger(__name__)
 _santonian_fields = ['endpoint', 'hdd', 'hdd_details', 'file', 'readfile']
 __AVG_TOLERANCE = 3  # * how much bigger as average a column is allowed to be to not get trimmed
 __COL_SPACING = 1  # * empty space between columns
+
 
 def load_config(file="./config.json"):
     global _santonian_fields
@@ -268,6 +271,117 @@ def calc_distribution(val_list: dict, method="median"):
         lens = {col: median(val_list[col]) for col in val_list}
     total_len = sum([x for x in lens.values()])
     return {col: x/total_len for col, x in lens.items()}
+
+
+def check_for_mp3_link(any_string: str) -> bool:
+    """
+    Checks if the given arbitrary string is of the searched structure, basically just a regex wrapper
+
+    Structure 'https://example.com/file.mp3'
+
+    :param str any_string:
+    :return: True if the string is of the searched property
+    :rtype: bool
+    """
+    return bool(re.search(r"^(https:\/\/)(.+)(\.mp3)$", any_string))
+
+
+def audio_sparklines(audio_mono_file: str, chars=32, skip=1, high_res=False,
+                     low_pass=None, high_pass=None) -> str:
+    """
+    Creates a simple representation of a given audio file by a 8 bit representation and 32 chars (by default)
+    Inspired by this: https://melatonin.dev/blog/audio-sparklines/
+
+    :param str audio_mono_file: path to a wave file, mono NOT stereo
+    :param int chars: number of characters representing the line
+    :param int skip: number of frames that get skipped to speed up processing
+    :param bool high_res: if true will output a high resolution string for storage
+    :param int low_pass: lower limit for frequency in Hz
+    :param int high_pass: higher limit for frequency in Hz
+    """
+
+    # sanitation of input, not sure if i am actually liable to do this
+    sparkslrr = (' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█')
+
+    if not isinstance(chars, int) or chars < 4:
+        chars = 4
+    if low_pass and high_pass:
+        if low_pass < 20 or low_pass > 8000:
+            low_pass = 20
+        if high_pass < 21 or high_pass > 8000:
+            high_pass = 8000
+        if high_pass < low_pass:
+            low_pass = low_pass + high_pass
+            high_pass = low_pass - high_pass
+            low_pass = low_pass - high_pass
+    else:
+        low_pass = None
+        high_pass = None
+
+    # input of file using wave library - TODO: use something more universal
+    ifile = wave.open(audio_mono_file)
+    sample_rate = ifile.getframerate()
+    audio = ifile.readframes(ifile.getnframes())
+    audio_int16 = numpy.frombuffer(audio, dtype=numpy.int16)
+    audio_float32 = audio_int16.astype(numpy.float32)
+
+    # fancy math i cannot fully comprehend, per https://stackoverflow.com/a/62298670
+    max_int16 = 2**15
+    audio_norm = audio_float32 / max_int16
+    # parting the big array in equal sized parts
+
+    n = len(audio_norm)
+    magnis = {}
+    parts = int(n/chars)
+    for i in range(chars-1):
+        start = i * parts
+        stop = (i+1) * parts
+        if stop > n:
+            stop = n-1
+        # using a fast fourier transformation of the signal, university math class is far in the past, don't crucify me
+        magnis[i] = numpy.abs(numpy.fft.rfft(audio_norm[start:stop:skip], n=sample_rate))
+
+    # apply high & low pass if they are actually set, not sure why exactly this works with this numpy array
+    if low_pass and high_pass:
+        ranging = {i: numpy.mean(magnis[i][low_pass:high_pass]) for i in range(chars-1)}
+    else:
+        ranging = {i: numpy.mean(magnis[i]) for i in range(chars-1)}
+    # dumping down the signal to an equal scale from 0 to 7, might be wise to use a logarithmic scale?
+    maxi = max(ranging.values())
+    spark_line = ""
+    if high_res:
+        steps = maxi/223  # 32 from 256 to ignore control chars
+        line = [int(x/steps) for x in ranging.values()]
+        for c in line:
+            spark_line += chr(c+31)
+    else:
+        steps = maxi/8
+        line = [int(x/steps) for x in ranging.values()]
+        # creating the actual str line
+        for c in line:
+            spark_line += sparkslrr[c]
+    return spark_line
+
+
+def storage_sparkline_to_sparkline(in_str: str) -> str:
+    """
+    If audio_sparkline is used in storage mode there will be a 7 bit instead of 3 bit resolution (the entire ascii
+    spectrum minus the first 32)
+
+    i got a super sweet one liner here, in long it would be this
+        number_list = []
+        for c in in_str:
+            number_list.append(ord(c))
+        spark_line = ""
+        for i in number_list:
+            spark_line += sparkslrr[int(i/(231/8))]
+        return spark_line
+
+    :param in_str: arbitrary ascii string
+    :return:
+    """
+    sparkslrr = (' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█')
+    return ''.join([sparkslrr[int(ord(c)/(231/8))] for c in in_str])
 
 
 def _calc_console_widths_absolute_method(headers: list, data: list, max_width=0, columns_width=None):
